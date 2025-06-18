@@ -55,7 +55,6 @@ def find_chunk_boundaries(
 
 def process_chunk(args):
     file_path, start, end, special_tokens = args
-
     with open(file_path, "rb") as file:
         file.seek(start)
         chunk = file.read(end - start).decode("utf-8", errors="ignore")
@@ -70,7 +69,6 @@ def process_chunk(args):
         for match in matches:
             pre_token_bytes = tuple(bytes([i]) for i in match.group().encode("utf-8"))
             pre_token_freq[pre_token_bytes] += 1
-
     return pre_token_freq
 
 def pre_tokenization(file_path: str | os.PathLike, special_tokens: list[str]):
@@ -92,19 +90,9 @@ def pre_tokenization(file_path: str | os.PathLike, special_tokens: list[str]):
         pre_token_freq.update(freq)
     return pre_token_freq
 
-def compute_BP_frequencies(pre_token_freq):
-    # compute frequencies of byte pairs
-    BP_freq: defaultdict[tuple[bytes, bytes], int] = defaultdict(int)
-
-    for token_tuple, freq in pre_token_freq.items():
-        for i in range(len(token_tuple)-1):
-            BP = (token_tuple[i], token_tuple[i+1])
-            BP_freq[BP] += freq
-    return BP_freq
-
 def get_most_frequent_BP(BP_freq: dict[tuple[bytes, bytes], int]) -> tuple[bytes, bytes]:
     '''
-    Given frequencies of pre-tokens, return the most frequent byte pair.
+    Given frequencies of byte pairs, return the most frequent byte pair.
     If ties occur, choose the lexicographically greater pair.
     '''
     chosen_BP: tuple[bytes, bytes] = (b'', b'')
@@ -175,17 +163,55 @@ def train_bpe_tokenizer(
 
     pre_token_freq = pre_tokenization(input_path, special_tokens)
 
+    # Build initial pair statistics and index
+    BP_freq = defaultdict(int)
+    BP_loc = defaultdict(set)  # pair -> set of token_tuples
+    for token_tuple, freq in pre_token_freq.items():
+        for i in range(len(token_tuple) - 1):
+            BP = (token_tuple[i], token_tuple[i+1])
+            BP_freq[BP] += freq
+            BP_loc[BP].add(token_tuple)
+
     merges = []
     while len(vocab) < vocab_size:
-        BP_freq = compute_BP_frequencies(pre_token_freq)
-
         BP_to_merge = get_most_frequent_BP(BP_freq)
         merges.append(BP_to_merge)
-
         merged_BP = BP_to_merge[0] + BP_to_merge[1]
         vocab[len(vocab)] = merged_BP
 
-        pre_token_freq = merge_pre_tokens(pre_token_freq, BP_to_merge)
+        # Find all token_tuples containing BP_to_merge
+        affected_tokens = list(BP_loc[BP_to_merge])
+        BP_loc[BP_to_merge].clear()
+        for token_tuple in affected_tokens:
+            freq = pre_token_freq.pop(token_tuple)
+            # Merge BP_to_merge in token_tuple
+            new_token_tuple = []
+            i = 0
+            while i < len(token_tuple):
+                if (
+                    i < len(token_tuple) - 1
+                    and token_tuple[i] == BP_to_merge[0]
+                    and token_tuple[i+1] == BP_to_merge[1]
+                ):
+                    new_token_tuple.append(merged_BP)
+                    i += 2
+                else:
+                    new_token_tuple.append(token_tuple[i])
+                    i += 1
+            new_token_tuple = tuple(new_token_tuple)
+            pre_token_freq[new_token_tuple] = freq
+
+            # Remove old pairs for this token_tuple
+            for i in range(len(token_tuple) - 1):
+                BP = (token_tuple[i], token_tuple[i+1])
+                BP_freq[BP] -= freq
+                BP_loc[BP].discard(token_tuple)
+
+            # Add new pairs for new_token_tuple
+            for i in range(len(new_token_tuple) - 1):
+                BP = (new_token_tuple[i], new_token_tuple[i+1])
+                BP_freq[BP] += freq
+                BP_loc[BP].add(new_token_tuple)
     return (vocab, merges)
 
 if __name__ == "__main__":
