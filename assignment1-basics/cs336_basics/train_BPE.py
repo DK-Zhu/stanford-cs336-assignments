@@ -106,29 +106,6 @@ def get_most_frequent_BP(BP_freq: dict[tuple[bytes, bytes], int]) -> tuple[bytes
                 chosen_BP = BP
     return chosen_BP
 
-def merge_pre_tokens(pre_token_freq, BP_to_merge):
-    '''
-    Update the pre_token_freq dict by merging the most frequent byte pair.
-    '''
-    new_pre_token_freq = {}
-    for token_tuple, freq in pre_token_freq.items():
-        new_token_tuple = []
-        i = 0
-        while i < len(token_tuple):
-            if (
-                i < len(token_tuple) - 1
-                and token_tuple[i] == BP_to_merge[0]
-                and token_tuple[i+1] == BP_to_merge[1]
-            ):
-                new_token_tuple.append(BP_to_merge[0] + BP_to_merge[1])
-                i += 2
-            else:
-                new_token_tuple.append(token_tuple[i])
-                i += 1
-        new_pre_token_freq[tuple(new_token_tuple)] = freq
-    pre_token_freq = new_pre_token_freq
-    return pre_token_freq
-
 def train_bpe_tokenizer(
     input_path: str | os.PathLike,
     vocab_size: int,
