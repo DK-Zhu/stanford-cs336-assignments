@@ -1,6 +1,11 @@
 import regex as re
 import pickle
 from typing import Iterator, Iterable
+import time
+import numpy as np
+from cs336_basics.text_splitter import find_chunk_boundaries
+import multiprocessing
+import os
 
 class Tokenizer:
     def __init__(
@@ -42,21 +47,24 @@ class Tokenizer:
         matches = re.finditer(PAT, part)
         for match in matches:
             pre_token = list(bytes([i]) for i in match.group().encode("utf-8"))
+            BP_set = set((pre_token[i], pre_token[i+1]) for i in range(len(pre_token)-1)) # for quick look-up
             for merge in self.merges:
-                new_pre_token = []
-                i = 0
-                while i < len(pre_token):
-                    if (
-                        i < len(pre_token) - 1
-                        and pre_token[i] == merge[0]
-                        and pre_token[i+1] == merge[1]
-                    ):
-                        new_pre_token.append(pre_token[i] + pre_token[i+1])
-                        i += 2
-                    else:
-                        new_pre_token.append(pre_token[i])
-                        i += 1
-                pre_token = new_pre_token
+                if merge in BP_set:
+                    new_pre_token = []
+                    i = 0
+                    while i < len(pre_token):
+                        if (
+                            i < len(pre_token) - 1
+                            and pre_token[i] == merge[0]
+                            and pre_token[i+1] == merge[1]
+                        ):
+                            new_pre_token.append(pre_token[i] + pre_token[i+1])
+                            i += 2
+                        else:
+                            new_pre_token.append(pre_token[i])
+                            i += 1
+                    pre_token = new_pre_token
+                    BP_set = set((pre_token[i], pre_token[i+1]) for i in range(len(pre_token)-1))
             for b in pre_token:
                 yield self.token_to_id[b]
 
@@ -93,3 +101,55 @@ class Tokenizer:
     def decode(self, ids: list[int]) -> str:
         tokens = [self.id_to_token[id] for id in ids]
         return b''.join(tokens).decode("utf-8", errors="replace")
+    
+def encode_chunk(args):
+    tokenizer, file_path, start, end = args
+    with open(file_path, "rb") as file:
+        file.seek(start)
+        chunk = file.read(end-start).decode("utf-8", errors="ignore")
+    return tokenizer.encode(chunk)
+
+if __name__ == "__main__":
+    parent_folder = "/Users/daokuan/Desktop/data"
+    special_tokens = ['<|endoftext|>']
+    num_processes = multiprocessing.cpu_count()
+
+    # tokenizer for tiny stories
+    vocab_filepath = f"{parent_folder}/Tokenizers/TinyStoriesV2-GPT4-train/vocab.pkl"
+    merges_filepath = f"{parent_folder}/Tokenizers/TinyStoriesV2-GPT4-train/merges.pkl"
+    tokenizer = Tokenizer.from_files(vocab_filepath, merges_filepath, special_tokens)
+    # # tokenizer for owt
+    # vocab_filepath = f"{parent_folder}/Tokenizers/owt_train/vocab.pkl"
+    # merges_filepath = f"{parent_folder}/Tokenizers/owt_train/merges.pkl"
+    # tokenizer = Tokenizer.from_files(vocab_filepath, merges_filepath, special_tokens)
+
+    filepath = f"{parent_folder}/Datasets/TinyStoriesV2-GPT4-train.txt"
+    # filepath = f"{parent_folder}/Datasets/TinyStoriesV2-GPT4-valid.txt"
+    # owt_filepath = f"{parent_folder}/Datasets/owt_train.txt"
+    # owt_filepath = f"{parent_folder}/Datasets/owt_valid.txt"
+
+    boundaries = find_chunk_boundaries(
+        file_path=filepath,
+        desired_num_chunks=num_processes,
+        split_special_token="<|endoftext|>".encode("utf-8")
+    )
+    args = [(tokenizer, filepath, start, end)
+            for start, end in zip(boundaries[:-1], boundaries[1:])]
+    with multiprocessing.Pool(num_processes) as pool:
+        token_ids = np.array([token_id for chunk in pool.map(encode_chunk, args) for token_id in chunk], dtype=np.uint16)
+
+    np.save(f"{parent_folder}/Datasets/TinyStories-tokenIDs-train.npy", token_ids)
+    # np.save(f"{parent_folder}/Datasets/TinyStories-tokenIDs-valid.npy", token_ids)
+    # np.save(f"{parent_folder}/Datasets/owt-tokenIDs-train.npy", token_ids)
+    # np.save(f"{parent_folder}/Datasets/owt-tokenIDs-valid.npy", token_ids)
+    
+    # # compute throughput and compression ratio
+    # start_time = time.time()
+    # with multiprocessing.Pool(num_processes) as pool:
+    #     token_ids = np.array([token_id for chunk in pool.map(encode_chunk, args) for token_id in chunk], dtype=np.uint16)
+    # elapsed = time.time() - start_time
+    # with open(filepath, "rb") as file:
+    #     file.seek(0, os.SEEK_END)
+    #     file_size = file.tell()
+    # print(f"throughput: {file_size / elapsed} bytes/second")
+    # print("compression ratio (tiny stories - valid):", file_size / len(token_ids))
