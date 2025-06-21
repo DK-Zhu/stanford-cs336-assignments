@@ -51,6 +51,7 @@ class Tokenizer:
             for merge in self.merges:
                 if merge in BP_set:
                     new_pre_token = []
+                    BP_set.clear()
                     i = 0
                     while i < len(pre_token):
                         if (
@@ -63,8 +64,10 @@ class Tokenizer:
                         else:
                             new_pre_token.append(pre_token[i])
                             i += 1
+
+                        if len(new_pre_token) > 1:
+                            BP_set.add((new_pre_token[-2], new_pre_token[-1]))
                     pre_token = new_pre_token
-                    BP_set = set((pre_token[i], pre_token[i+1]) for i in range(len(pre_token)-1))
             for b in pre_token:
                 yield self.token_to_id[b]
 
